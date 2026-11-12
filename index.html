@@ -1,0 +1,1723 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DocuScan Pro - Aplikasi Scanner Dokumen & Printer</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- jsPDF untuk Ekspor PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* Animasi Garis Laser Scanner */
+        @keyframes scanLaser {
+            0% { top: 5%; opacity: 0.2; }
+            50% { top: 92%; opacity: 1; }
+            100% { top: 5%; opacity: 0.2; }
+        }
+        .scanner-laser {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, #3b82f6, #60a5fa, #3b82f6, transparent);
+            box-shadow: 0 0 15px 3px rgba(59, 130, 246, 0.7);
+            animation: scanLaser 2.5s ease-in-out infinite;
+            pointer-events: none;
+        }
+
+        /* Animasi Kertas Keluar Printer */
+        @keyframes printPaper {
+            0% { transform: translateY(-20px); opacity: 0; }
+            100% { transform: translateY(0); opacity: 1; }
+        }
+        .animate-print {
+            animation: printPaper 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        /* Styling Print untuk Cetak Langsung */
+        @page {
+            size: auto;
+            margin: 0mm;
+        }
+        @media print {
+            html, body {
+                margin: 0 !important;
+                padding: 0 !important;
+                background: #ffffff !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            body * {
+                visibility: hidden;
+            }
+            #print-area, #print-area * {
+                visibility: visible;
+            }
+            #print-area {
+                display: block !important;
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                background: #ffffff !important;
+            }
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col select-none">
+
+    <!-- Header / Navbar -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-md shadow-blue-600/20">
+                    <i data-lucide="scan-line" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg text-slate-900 leading-tight">DocuScan <span class="text-blue-600">Pro</span></h1>
+                    <p class="text-xs text-slate-500 hidden sm:block">Smart Document Scanner & Printer Utility</p>
+                </div>
+            </div>
+
+            <!-- Status Printer & Aksi Utama -->
+            <div class="flex items-center gap-2 sm:gap-3">
+                <div class="hidden md:flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium border border-emerald-200">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Scanner & Printer Siap
+                </div>
+
+                <button onclick="exportAllToPDF()" id="btn-export-pdf" disabled
+                    class="flex items-center gap-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition shadow-sm">
+                    <i data-lucide="file-down" class="w-4 h-4"></i>
+                    <span class="hidden sm:inline">Simpan PDF</span>
+                    <span id="page-badge" class="bg-blue-500 text-white text-xs px-1.5 py-0.5 rounded-md hidden">0</span>
+                </button>
+
+                <button onclick="printDocuments()" id="btn-print" disabled
+                    class="flex items-center gap-2 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition shadow-sm">
+                    <i data-lucide="printer" class="w-4 h-4"></i>
+                    <span class="hidden sm:inline">Cetak</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Kolom Kiri: Area Pemindaian & Editor (8 Kolom di Desktop) -->
+        <div class="lg:col-span-8 flex flex-col gap-4">
+            
+            <!-- Tab Mode Sumber Input -->
+            <div class="bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm flex gap-1.5">
+                <button onclick="switchMode('upload')" id="tab-upload"
+                    class="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold transition bg-blue-600 text-white shadow-sm">
+                    <i data-lucide="upload-cloud" class="w-4 h-4"></i>
+                    Unggah / Flatbed Scan
+                </button>
+                <button onclick="switchMode('camera')" id="tab-camera"
+                    class="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold transition text-slate-600 hover:bg-slate-100">
+                    <i data-lucide="camera" class="w-4 h-4"></i>
+                    Kamera Scanner
+                </button>
+            </div>
+
+            <!-- Workspace Utama (Kamera / Upload / Preview Hasil Scan) -->
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-[460px] relative">
+                
+                <!-- 1. VIEW: UPLOAD / DROPZONE -->
+                <div id="view-upload" class="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                    <div id="drop-zone" 
+                        class="w-full max-w-lg border-2 border-dashed border-slate-300 hover:border-blue-500 bg-slate-50/70 hover:bg-blue-50/30 rounded-2xl p-8 sm:p-12 transition cursor-pointer flex flex-col items-center justify-center group"
+                        onclick="document.getElementById('file-input').click()">
+                        <div class="w-16 h-16 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                            <i data-lucide="file-scan" class="w-8 h-8"></i>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-800 mb-1">Letakkan Dokumen di Sini</h3>
+                        <p class="text-sm text-slate-500 mb-6 max-w-xs">
+                            Seret & lepas file gambar (JPG, PNG, WEBP) atau klik untuk memilih dokumen dari perangkat Anda.
+                        </p>
+                        <div class="flex flex-wrap justify-center gap-3">
+                            <span class="px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl shadow-sm group-hover:bg-blue-700 transition flex items-center gap-2">
+                                <i data-lucide="folder-open" class="w-4 h-4"></i> Pilih File
+                            </span>
+                            <button type="button" onclick="event.stopPropagation(); loadSampleDocument()" 
+                                class="px-4 py-2.5 bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 text-sm font-medium rounded-xl transition flex items-center gap-2">
+                                <i data-lucide="sparkles" class="w-4 h-4 text-amber-500"></i> Coba Dokumen Contoh
+                            </button>
+                        </div>
+                        <input type="file" id="file-input" accept="image/*" multiple class="hidden" onchange="handleFileSelect(event)">
+                    </div>
+                </div>
+
+                <!-- 2. VIEW: KAMERA SCANNER -->
+                <div id="view-camera" class="hidden flex-1 flex-col bg-slate-900 relative">
+                    <div class="relative flex-1 flex items-center justify-center overflow-hidden min-h-[380px]">
+                        <video id="camera-video" autoplay playsinline class="w-full h-full object-contain max-h-[500px]"></video>
+                        
+                        <!-- Overlay Bingkai Dokumen (A4 Guide) -->
+                        <div class="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
+                            <div class="w-full max-w-[280px] aspect-[1/1.414] border-2 border-blue-400/80 rounded-lg relative shadow-[0_0_0_9999px_rgba(15,23,42,0.55)]">
+                                <!-- Sudut Bingkai -->
+                                <div class="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-blue-400 rounded-tl"></div>
+                                <div class="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-blue-400 rounded-tr"></div>
+                                <div class="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-blue-400 rounded-bl"></div>
+                                <div class="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-blue-400 rounded-br"></div>
+                                <div class="scanner-laser"></div>
+                                <span class="absolute -top-7 left-1/2 -translate-x-1/2 bg-slate-900/80 text-white text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap">
+                                    Posisikan dokumen di dalam bingkai
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Pesan Error Kamera -->
+                        <div id="camera-error" class="hidden absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center p-6 text-center text-white">
+                            <i data-lucide="camera-off" class="w-12 h-12 text-rose-400 mb-3"></i>
+                            <h4 class="font-semibold text-base mb-1">Kamera Tidak Dapat Diakses</h4>
+                            <p class="text-xs text-slate-400 max-w-xs mb-4" id="camera-error-msg">Pastikan izin kamera diberikan pada browser Anda atau gunakan mode Unggah File.</p>
+                            <button onclick="switchMode('upload')" class="px-4 py-2 bg-blue-600 rounded-xl text-sm font-medium">Beralih ke Unggah File</button>
+                        </div>
+                    </div>
+
+                    <!-- Kontrol Kamera -->
+                    <div class="bg-slate-950 p-4 flex items-center justify-between px-6 border-t border-slate-800">
+                        <button onclick="switchCameraDevice()" class="p-3 text-slate-300 hover:text-white hover:bg-slate-800 rounded-full transition" title="Ganti Kamera">
+                            <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+                        </button>
+                        
+                        <button onclick="captureFromCamera()" class="w-16 h-16 rounded-full bg-white p-1 shadow-lg hover:scale-105 active:scale-95 transition flex items-center justify-center">
+                            <div class="w-full h-full rounded-full border-2 border-slate-900 bg-blue-600 flex items-center justify-center text-white">
+                                <i data-lucide="scan" class="w-6 h-6"></i>
+                            </div>
+                        </button>
+
+                        <button onclick="switchMode('upload')" class="p-3 text-slate-300 hover:text-white hover:bg-slate-800 rounded-full transition" title="Tutup Kamera">
+                            <i data-lucide="x" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 3. VIEW: EDITOR & HASIL PEMINDAIAN -->
+                <div id="view-editor" class="hidden flex-1 flex-col">
+                    <!-- Toolbar Atas Editor -->
+                    <div class="bg-slate-100 border-b border-slate-200 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+                        <div class="flex items-center gap-1.5">
+                            <button onclick="rotateCurrent(-90)" class="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-700 transition" title="Putar Kiri 90°">
+                                <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                            </button>
+                            <button onclick="rotateCurrent(90)" class="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-700 transition" title="Putar Kanan 90°">
+                                <i data-lucide="rotate-cw" class="w-4 h-4"></i>
+                            </button>
+                            <button onclick="toggleCropMode()" id="btn-crop-toggle" class="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition">
+                                <i data-lucide="crop" class="w-4 h-4 text-blue-600"></i>
+                                <span>Potong (Crop)</span>
+                            </button>
+                            <button onclick="confirmDeletePage(activePageIndex)" class="p-2 bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 rounded-lg text-slate-500 hover:text-rose-600 transition" title="Hapus Halaman Ini">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+
+                        <div class="flex items-center gap-2">
+                            <span id="scan-dimensions" class="text-xs text-slate-500 font-mono hidden sm:inline">A4 • Master 1000 DPI</span>
+                            <button onclick="addNewScanPrompt()" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold transition">
+                                <i data-lucide="plus" class="w-3.5 h-3.5"></i> Pindai Lagi
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Area Canvas Preview Dokumen -->
+                    <div class="flex-1 bg-slate-200/70 p-4 sm:p-6 flex items-center justify-center relative overflow-hidden min-h-[360px]" id="canvas-wrapper">
+                        <!-- Efek Animasi Laser saat memproses -->
+                        <div id="processing-overlay" class="hidden absolute inset-0 bg-slate-900/40 backdrop-blur-[1px] z-20 flex flex-col items-center justify-center">
+                            <div class="scanner-laser"></div>
+                            <div class="bg-white px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-2.5 text-sm font-semibold text-slate-800">
+                                <i data-lucide="loader-2" class="w-4 h-4 text-blue-600 animate-spin"></i>
+                                Memindai & Meningkatkan Kualitas...
+                            </div>
+                        </div>
+
+                        <div class="relative shadow-xl bg-white p-2 rounded-sm max-w-full max-h-[420px] flex items-center justify-center">
+                            <canvas id="preview-canvas" class="max-w-full max-h-[400px] object-contain block cursor-crosshair"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Panel Kontrol Crop (Muncul saat mode Crop aktif) -->
+                    <div id="crop-controls" class="hidden bg-amber-50 border-t border-amber-200 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                        <div class="flex items-center gap-2 text-xs text-amber-800 font-medium">
+                            <i data-lucide="scan" class="w-4 h-4 text-amber-600 shrink-0"></i>
+                            <span>Tarik ke-4 sudut biru secara bebas mengikuti sudut kertas miring, lalu terapkan untuk meluruskan.</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="resetCropCorners()" class="px-3 py-1.5 bg-white border border-amber-300 text-amber-800 rounded-lg text-xs font-semibold hover:bg-amber-100">
+                                Reset Sudut
+                            </button>
+                            <button onclick="cancelCrop()" class="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50">
+                                Batal
+                            </button>
+                            <button onclick="applyCrop()" class="px-3.5 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 flex items-center gap-1">
+                                <i data-lucide="check" class="w-3.5 h-3.5"></i> Luruskan & Potong
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Panel Filter & Penyesuaian Scanner -->
+                    <div class="bg-white border-t border-slate-200 p-4 space-y-4">
+                        <!-- Pilihan Filter Dokumen -->
+                        <div>
+                            <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">Mode Pemindaian (Kualitas Cetak)</label>
+                            <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                                <button onclick="setFilter('proprint')" data-filter="proprint" class="filter-btn active flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl border-2 border-blue-600 bg-blue-50 text-blue-700 text-xs font-semibold transition">
+                                    <i data-lucide="printer-check" class="w-4 h-4"></i> Cetak Pro
+                                </button>
+                                <button onclick="setFilter('magic')" data-filter="magic" class="filter-btn flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition">
+                                    <i data-lucide="wand-2" class="w-4 h-4"></i> Magic Color
+                                </button>
+                                <button onclick="setFilter('bw')" data-filter="bw" class="filter-btn flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition">
+                                    <i data-lucide="contrast" class="w-4 h-4"></i> Laser B&W
+                                </button>
+                                <button onclick="setFilter('grayscale')" data-filter="grayscale" class="filter-btn flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition">
+                                    <i data-lucide="layers" class="w-4 h-4"></i> Grayscale
+                                </button>
+                                <button onclick="setFilter('original')" data-filter="original" class="filter-btn flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition">
+                                    <i data-lucide="image" class="w-4 h-4"></i> Asli (Foto)
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Slider Kecerahan & Kontras -->
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                            <div>
+                                <div class="flex justify-between text-xs font-medium text-slate-600 mb-1">
+                                    <span class="flex items-center gap-1"><i data-lucide="sun" class="w-3.5 h-3.5 text-amber-500"></i> Kecerahan</span>
+                                    <span id="val-brightness">10</span>
+                                </div>
+                                <input type="range" id="slider-brightness" min="-60" max="80" value="10" oninput="updateAdjustments()"
+                                    class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-xs font-medium text-slate-600 mb-1">
+                                    <span class="flex items-center gap-1"><i data-lucide="sliders" class="w-3.5 h-3.5 text-blue-500"></i> Kontras Teks</span>
+                                    <span id="val-contrast">20</span>
+                                </div>
+                                <input type="range" id="slider-contrast" min="-40" max="90" value="20" oninput="updateAdjustments()"
+                                    class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Kolom Kanan: Antrean Halaman & Pengaturan Printer (4 Kolom di Desktop) -->
+        <div class="lg:col-span-4 flex flex-col gap-4">
+            
+            <!-- Pengaturan Output Printer / PDF -->
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                <div class="flex items-center gap-2 mb-3">
+                    <i data-lucide="settings-2" class="w-4 h-4 text-blue-600"></i>
+                    <h2 class="font-bold text-sm text-slate-800">Pengaturan Kertas & Ekspor</h2>
+                </div>
+                
+                <div class="space-y-3">
+                    <div>
+                        <label class="text-xs font-medium text-slate-600 block mb-1">Nama File Dokumen</label>
+                        <input type="text" id="doc-filename" value="Scan_Dokumen_2026" 
+                            class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2.5">
+                        <div>
+                            <label class="text-xs font-medium text-slate-600 block mb-1">Ukuran Kertas</label>
+                            <select id="paper-size" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="a4" selected>A4 (210 × 297 mm)</option>
+                                <option value="letter">Letter (216 × 279 mm)</option>
+                                <option value="legal">Legal (216 × 356 mm)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs font-medium text-slate-600 block mb-1">Margin Kertas</label>
+                            <select id="paper-margin" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="10" selected>Standar (10 mm)</option>
+                                <option value="0">Tanpa Margin (Penuh)</option>
+                                <option value="20">Lebar (20 mm)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Daftar Halaman Terpindai (Tray Dokumen) -->
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex-1 flex flex-col min-h-[300px]">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="files" class="w-4 h-4 text-blue-600"></i>
+                        <h2 class="font-bold text-sm text-slate-800">Halaman Terpindai</h2>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="toggleSelectMode()" id="btn-select-mode" class="hidden text-xs px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium transition flex items-center gap-1">
+                            <i data-lucide="check-square" class="w-3.5 h-3.5"></i>
+                            <span id="select-mode-label">Pilih</span>
+                        </button>
+                        <button onclick="clearAllPages()" id="btn-clear-all" class="hidden text-xs text-rose-600 hover:underline font-medium">
+                            Hapus Semua
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Bar Aksi Multi-Pilih Hapus -->
+                <div id="bulk-delete-bar" class="hidden mb-3 px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between gap-2">
+                    <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                        <input type="checkbox" id="checkbox-select-all" onchange="toggleSelectAllPages(this.checked)" class="w-4 h-4 rounded accent-rose-600 cursor-pointer">
+                        <span>Pilih Semua (<span id="selected-count">0</span>)</span>
+                    </label>
+                    <button onclick="confirmDeleteSelectedPages()" id="btn-delete-selected" disabled
+                        class="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 disabled:bg-rose-300 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition flex items-center gap-1">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Hapus Terpilih
+                    </button>
+                </div>
+
+                <!-- Empty State Tray -->
+                <div id="tray-empty" class="flex-1 flex flex-col items-center justify-center text-center p-6 border-2 border-dashed border-slate-100 rounded-xl">
+                    <div class="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mb-2">
+                        <i data-lucide="file-plus" class="w-6 h-6"></i>
+                    </div>
+                    <p class="text-xs font-medium text-slate-500">Belum ada halaman dipindai</p>
+                    <p class="text-[11px] text-slate-400 mt-0.5">Unggah gambar atau gunakan kamera untuk mulai memindai.</p>
+                </div>
+
+                <!-- Grid Halaman -->
+                <div id="pages-grid" class="hidden grid-cols-2 gap-3 overflow-y-auto max-h-[360px] pr-1">
+                    <!-- Item halaman akan dirender lewat JS -->
+                </div>
+
+                <!-- Tombol Unduh PDF & Gambar -->
+                <div id="single-download-box" class="hidden mt-4 pt-3 border-t border-slate-100 space-y-2">
+                    <button onclick="exportAllToPDF()" class="w-full py-2.5 px-3 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-2 shadow-sm">
+                        <i data-lucide="file-text" class="w-4 h-4"></i> Unduh Semua Halaman (PDF)
+                    </button>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button onclick="exportSinglePageToPDF()" class="py-2 px-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5">
+                            <i data-lucide="file-down" class="w-3.5 h-3.5"></i> Hal. Ini (PDF)
+                        </button>
+                        <button onclick="downloadCurrentImage()" class="py-2 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5">
+                            <i data-lucide="image-down" class="w-3.5 h-3.5"></i> Hal. Ini (JPG)
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Notifikasi Toast (Pengganti alert) -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- Modal Konfirmasi Kustom (Pengganti confirm) -->
+    <div id="confirm-modal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 animate-print">
+            <div class="w-12 h-12 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-4">
+                <i data-lucide="trash-2" class="w-6 h-6"></i>
+            </div>
+            <h3 class="text-lg font-bold text-slate-900 mb-1" id="confirm-title">Hapus Halaman?</h3>
+            <p class="text-sm text-slate-500 mb-6" id="confirm-desc">Tindakan ini tidak dapat dibatalkan.</p>
+            <div class="flex gap-3 justify-end">
+                <button onclick="closeConfirmModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold rounded-xl transition">
+                    Batal
+                </button>
+                <button id="confirm-yes-btn" class="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold rounded-xl transition">
+                    Ya, Hapus
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Area Khusus Print (Hidden di layar, terlihat saat window.print()) -->
+    <div id="print-area" class="hidden"></div>
+
+    <script>
+        // Inisialisasi Ikon Lucide
+        lucide.createIcons();
+
+        // State Aplikasi
+        let scannedPages = []; // Array objek: { id, originalDataUrl, processedDataUrl, filter, brightness, contrast, rotation }
+        let activePageIndex = -1;
+        let currentStream = null;
+        let useFrontCamera = false;
+        let isSelectMode = false;
+        let selectedPageIds = new Set();
+
+        // State Crop Perspektif 4-Titik Bebas
+        let isCropping = false;
+        let cropPoints = {
+            tl: { x: 0.12, y: 0.10 },
+            tr: { x: 0.88, y: 0.10 },
+            br: { x: 0.88, y: 0.90 },
+            bl: { x: 0.12, y: 0.90 }
+        };
+        let draggingCorner = null;
+
+        // Referensi DOM
+        const canvas = document.getElementById('preview-canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const dropZone = document.getElementById('drop-zone');
+
+        // Setup Drag & Drop pada Dropzone
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, false);
+        });
+
+        dropZone.addEventListener('dragover', () => dropZone.classList.add('border-blue-500', 'bg-blue-50/50'));
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-blue-500', 'bg-blue-50/50'));
+        dropZone.addEventListener('drop', (e) => {
+            dropZone.classList.remove('border-blue-500', 'bg-blue-50/50');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) processFiles(files);
+        });
+
+        // Fungsi Toast Notifikasi
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const colors = {
+                info: 'bg-slate-900 text-white',
+                success: 'bg-emerald-600 text-white',
+                error: 'bg-rose-600 text-white'
+            };
+            toast.className = `${colors[type] || colors.info} px-4 py-3 rounded-xl shadow-lg text-sm font-medium flex items-center gap-2.5 animate-print pointer-events-auto`;
+            toast.innerHTML = `<span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // Navigasi Mode (Upload vs Camera vs Editor)
+        function switchMode(mode) {
+            const tabUpload = document.getElementById('tab-upload');
+            const tabCamera = document.getElementById('tab-camera');
+            const viewUpload = document.getElementById('view-upload');
+            const viewCamera = document.getElementById('view-camera');
+            const viewEditor = document.getElementById('view-editor');
+
+            // Reset tab styles
+            tabUpload.className = 'flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold transition text-slate-600 hover:bg-slate-100';
+            tabCamera.className = 'flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold transition text-slate-600 hover:bg-slate-100';
+
+            if (mode === 'upload') {
+                stopCamera();
+                tabUpload.className = 'flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold transition bg-blue-600 text-white shadow-sm';
+                viewUpload.classList.remove('hidden');
+                viewCamera.classList.add('hidden');
+                viewEditor.classList.add('hidden');
+            } else if (mode === 'camera') {
+                tabCamera.className = 'flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold transition bg-blue-600 text-white shadow-sm';
+                viewUpload.classList.add('hidden');
+                viewCamera.classList.remove('hidden');
+                viewCamera.classList.add('flex');
+                viewEditor.classList.add('hidden');
+                startCamera();
+            } else if (mode === 'editor') {
+                stopCamera();
+                viewUpload.classList.add('hidden');
+                viewCamera.classList.add('hidden');
+                viewEditor.classList.remove('hidden');
+                viewEditor.classList.add('flex');
+            }
+        }
+
+        function addNewScanPrompt() {
+            isCropping = false;
+            document.getElementById('crop-controls').classList.add('hidden');
+            switchMode('upload');
+        }
+
+        // ================= KAMERA SCANNER =================
+        async function startCamera() {
+            const video = document.getElementById('camera-video');
+            const errorBox = document.getElementById('camera-error');
+            errorBox.classList.add('hidden');
+
+            try {
+                if (currentStream) stopCamera();
+                const constraints = {
+                    video: {
+                        facingMode: useFrontCamera ? 'user' : 'environment',
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    }
+                };
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+            } catch (err) {
+                console.error("Camera error:", err);
+                errorBox.classList.remove('hidden');
+            }
+        }
+
+        function stopCamera() {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+                currentStream = null;
+            }
+        }
+
+        function switchCameraDevice() {
+            useFrontCamera = !useFrontCamera;
+            startCamera();
+        }
+
+        function captureFromCamera() {
+            const video = document.getElementById('camera-video');
+            if (!video.videoWidth) return;
+
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = video.videoWidth;
+            tempCanvas.height = video.videoHeight;
+            const tCtx = tempCanvas.getContext('2d');
+            tCtx.drawImage(video, 0, 0);
+
+            const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.92);
+            addScannedPage(dataUrl);
+            showToast('Dokumen berhasil dipindai dari kamera!', 'success');
+        }
+
+        // ================= UNGGAH & DOKUMEN CONTOH =================
+        function handleFileSelect(event) {
+            const files = event.target.files;
+            if (files.length > 0) {
+                processFiles(files);
+                event.target.value = ''; // Reset input
+            }
+        }
+
+        function processFiles(files) {
+            Array.from(files).forEach(file => {
+                if (!file.type.startsWith('image/')) {
+                    showToast(`File "${file.name}" bukan gambar.`, 'error');
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    addScannedPage(e.target.result);
+                };
+                reader.readAsDataURL(file);
+            });
+            showToast(`${files.length} dokumen berhasil dimuat`, 'success');
+        }
+
+        // Membuat Dokumen Contoh (Invoice / Surat Resmi Simulasi)
+        function loadSampleDocument() {
+            const sampleCanvas = document.createElement('canvas');
+            sampleCanvas.width = 800;
+            sampleCanvas.height = 1131; // Rasio A4
+            const sCtx = sampleCanvas.getContext('2d');
+
+            // Latar kertas agak krem (seperti foto kertas di meja)
+            sCtx.fillStyle = '#f3efe6';
+            sCtx.fillRect(0, 0, 800, 1131);
+
+            // Efek bayangan lembut di sudut
+            const grad = sCtx.createLinearGradient(0, 0, 800, 1131);
+            grad.addColorStop(0, 'rgba(0,0,0,0.06)');
+            grad.addColorStop(0.5, 'rgba(255,255,255,0)');
+            grad.addColorStop(1, 'rgba(0,0,0,0.08)');
+            sCtx.fillStyle = grad;
+            sCtx.fillRect(0, 0, 800, 1131);
+
+            // Header Dokumen
+            sCtx.fillStyle = '#1e293b';
+            sCtx.font = 'bold 34px Inter, sans-serif';
+            sCtx.fillText('PT NUSANTARA TEKNOLOGI DIGITAL', 60, 100);
+            
+            sCtx.fillStyle = '#475569';
+            sCtx.font = '16px Inter, sans-serif';
+            sCtx.fillText('Jl. Jenderal Sudirman Kav. 52-53, Jakarta Selatan 12190', 60, 130);
+            sCtx.fillText('Telp: (021) 555-0192 | Email: admin@nusantaratech.co.id', 60, 155);
+
+            // Garis Pembatas
+            sCtx.strokeStyle = '#1e293b';
+            sCtx.lineWidth = 3;
+            sCtx.beginPath();
+            sCtx.moveTo(60, 180);
+            sCtx.lineTo(740, 180);
+            sCtx.stroke();
+
+            // Judul Surat
+            sCtx.fillStyle = '#0f172a';
+            sCtx.font = 'bold 24px Inter, sans-serif';
+            sCtx.fillText('INVOICE PENAGIHAN #INV-2026-089', 60, 240);
+
+            sCtx.font = '18px Inter, sans-serif';
+            sCtx.fillStyle = '#334155';
+            sCtx.fillText('Tanggal: 13 November 2026', 60, 275);
+            sCtx.fillText('Kepada Yth: Bapak Budi Santoso - CV Maju Bersama', 60, 305);
+
+            // Tabel Item
+            sCtx.fillStyle = '#e2e8f0';
+            sCtx.fillRect(60, 350, 680, 45);
+            sCtx.fillStyle = '#0f172a';
+            sCtx.font = 'bold 16px Inter, sans-serif';
+            sCtx.fillText('Deskripsi Layanan / Produk', 80, 378);
+            sCtx.fillText('Qty', 450, 378);
+            sCtx.fillText('Total (IDR)', 580, 378);
+
+            const items = [
+                ['Lisensi Software Enterprise Cloud', '2', 'Rp 4.500.000'],
+                ['Instalasi & Konfigurasi Server Lokal', '1', 'Rp 2.000.000'],
+                ['Pemeliharaan Sistem Tahunan', '1', 'Rp 1.500.000']
+            ];
+
+            let yPos = 435;
+            sCtx.font = '16px Inter, sans-serif';
+            items.forEach(item => {
+                sCtx.fillStyle = '#1e293b';
+                sCtx.fillText(item[0], 80, yPos);
+                sCtx.fillText(item[1], 455, yPos);
+                sCtx.fillText(item[2], 580, yPos);
+                
+                sCtx.strokeStyle = '#cbd5e1';
+                sCtx.lineWidth = 1;
+                sCtx.beginPath();
+                sCtx.moveTo(60, yPos + 20);
+                sCtx.lineTo(740, yPos + 20);
+                sCtx.stroke();
+                yPos += 60;
+            });
+
+            // Total
+            sCtx.font = 'bold 20px Inter, sans-serif';
+            sCtx.fillStyle = '#0f172a';
+            sCtx.fillText('TOTAL TAGIHAN: Rp 8.000.000', 430, yPos + 40);
+
+            // Tanda Tangan & Stempel Simulasi
+            sCtx.font = '16px Inter, sans-serif';
+            sCtx.fillText('Hormat Kami,', 550, yPos + 140);
+            
+            // Stempel Biru
+            sCtx.strokeStyle = 'rgba(37, 99, 235, 0.65)';
+            sCtx.lineWidth = 3;
+            sCtx.beginPath();
+            sCtx.arc(580, yPos + 195, 42, 0, Math.PI * 2);
+            sCtx.stroke();
+            sCtx.fillStyle = 'rgba(37, 99, 235, 0.65)';
+            sCtx.font = 'bold 11px Inter, sans-serif';
+            sCtx.fillText('LUNAS / VERIFIED', 532, yPos + 199);
+
+            sCtx.fillStyle = '#0f172a';
+            sCtx.font = 'bold 16px Inter, sans-serif';
+            sCtx.fillText('Direktur Keuangan', 530, yPos + 260);
+
+            addScannedPage(sampleCanvas.toDataURL('image/jpeg', 0.95));
+            showToast('Dokumen contoh dimuat dengan filter Magic Color!', 'success');
+        }
+
+        // ================= MANAJEMEN HALAMAN & PEMROSESAN GAMBAR =================
+        function addScannedPage(dataUrl) {
+            const newPage = {
+                id: Date.now() + Math.random(),
+                originalDataUrl: dataUrl,
+                processedDataUrl: dataUrl,
+                filter: 'proprint', // Default mode Cetak Pro jernih & bebas bayangan
+                brightness: 8,
+                contrast: 22,
+                rotation: 0
+            };
+
+            scannedPages.push(newPage);
+            activePageIndex = scannedPages.length - 1;
+            
+            switchMode('editor');
+            syncControlsWithActivePage();
+            renderActivePage(true);
+            updateTrayUI();
+        }
+
+        function selectPage(index) {
+            if (index < 0 || index >= scannedPages.length) return;
+            activePageIndex = index;
+            isCropping = false;
+            document.getElementById('crop-controls').classList.add('hidden');
+            switchMode('editor');
+            syncControlsWithActivePage();
+            renderActivePage(false);
+            updateTrayUI();
+        }
+
+        function syncControlsWithActivePage() {
+            const page = scannedPages[activePageIndex];
+            if (!page) return;
+
+            document.getElementById('slider-brightness').value = page.brightness;
+            document.getElementById('val-brightness').innerText = page.brightness;
+            document.getElementById('slider-contrast').value = page.contrast;
+            document.getElementById('val-contrast').innerText = page.contrast;
+
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                if (btn.dataset.filter === page.filter) {
+                    btn.className = 'filter-btn active flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl border-2 border-blue-600 bg-blue-50 text-blue-700 text-xs font-semibold transition';
+                } else {
+                    btn.className = 'filter-btn flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition';
+                }
+            });
+        }
+
+        function setFilter(filterType) {
+            if (activePageIndex === -1) return;
+            scannedPages[activePageIndex].filter = filterType;
+            syncControlsWithActivePage();
+            renderActivePage(true);
+        }
+
+        function updateAdjustments() {
+            if (activePageIndex === -1) return;
+            const brightness = parseInt(document.getElementById('slider-brightness').value, 10);
+            const contrast = parseInt(document.getElementById('slider-contrast').value, 10);
+
+            document.getElementById('val-brightness').innerText = brightness;
+            document.getElementById('val-contrast').innerText = contrast;
+
+            scannedPages[activePageIndex].brightness = brightness;
+            scannedPages[activePageIndex].contrast = contrast;
+            renderActivePage(false);
+        }
+
+        function rotateCurrent(deg) {
+            if (activePageIndex === -1) return;
+            const page = scannedPages[activePageIndex];
+            page.rotation = (page.rotation + deg + 360) % 360;
+            renderActivePage(false);
+        }
+
+        // Penghapusan bayangan kertas adaptif
+        function normalizePaperIllumination(data, width, height, strength = 0.85) {
+            const scale = 16;
+            const gw = Math.max(4, Math.floor(width / scale));
+            const gh = Math.max(4, Math.floor(height / scale));
+            const bgGrid = new Float32Array(gw * gh);
+
+            for (let gy = 0; gy < gh; gy++) {
+                const yStart = Math.floor((gy / gh) * height);
+                const yEnd = Math.min(height, Math.floor(((gy + 1) / gh) * height));
+                for (let gx = 0; gx < gw; gx++) {
+                    const xStart = Math.floor((gx / gw) * width);
+                    const xEnd = Math.min(width, Math.floor(((gx + 1) / gw) * width));
+                    let maxLum = 120;
+                    for (let y = yStart; y < yEnd; y += 2) {
+                        for (let x = xStart; x < xEnd; x += 2) {
+                            const idx = (y * width + x) * 4;
+                            const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                            if (lum > maxLum) maxLum = lum;
+                        }
+                    }
+                    bgGrid[gy * gw + gx] = maxLum;
+                }
+            }
+
+            const smoothGrid = new Float32Array(gw * gh);
+            for (let gy = 0; gy < gh; gy++) {
+                for (let gx = 0; gx < gw; gx++) {
+                    let sum = 0;
+                    let count = 0;
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dx = -1; dx <= 1; dx++) {
+                            const ny = gy + dy;
+                            const nx = gx + dx;
+                            if (ny >= 0 && ny < gh && nx >= 0 && nx < gw) {
+                                sum += bgGrid[ny * gw + nx];
+                                count++;
+                            }
+                        }
+                    }
+                    smoothGrid[gy * gw + gx] = sum / count;
+                }
+            }
+
+            for (let y = 0; y < height; y++) {
+                const fy = (y / height) * (gh - 1);
+                const gy0 = Math.floor(fy);
+                const gy1 = Math.min(gh - 1, gy0 + 1);
+                const wy = fy - gy0;
+
+                for (let x = 0; x < width; x++) {
+                    const fx = (x / width) * (gw - 1);
+                    const gx0 = Math.floor(fx);
+                    const gx1 = Math.min(gw - 1, gx0 + 1);
+                    const wx = fx - gx0;
+
+                    const bg00 = smoothGrid[gy0 * gw + gx0];
+                    const bg10 = smoothGrid[gy0 * gw + gx1];
+                    const bg01 = smoothGrid[gy1 * gw + gx0];
+                    const bg11 = smoothGrid[gy1 * gw + gx1];
+
+                    const localBg = (bg00 * (1 - wx) + bg10 * wx) * (1 - wy) + (bg01 * (1 - wx) + bg11 * wx) * wy;
+                    const gain = 1 + ((255 / Math.max(110, localBg)) - 1) * strength;
+
+                    const idx = (y * width + x) * 4;
+                    data[idx] = Math.min(255, data[idx] * gain);
+                    data[idx + 1] = Math.min(255, data[idx + 1] * gain);
+                    data[idx + 2] = Math.min(255, data[idx + 2] * gain);
+                }
+            }
+        }
+
+        // Penajaman teks & garis
+        function applyTextSharpening(data, width, height, amount = 0.85) {
+            const copy = new Uint8ClampedArray(data);
+            const rowBytes = width * 4;
+
+            for (let y = 1; y < height - 1; y++) {
+                const rowOffset = y * rowBytes;
+                for (let x = 1; x < width - 1; x++) {
+                    const idx = rowOffset + x * 4;
+                    for (let c = 0; c < 3; c++) {
+                        const center = copy[idx + c];
+                        const blur = (
+                            (copy[idx - rowBytes + c] + copy[idx + rowBytes + c] + copy[idx - 4 + c] + copy[idx + 4 + c]) * 2 +
+                            (copy[idx - rowBytes - 4 + c] + copy[idx - rowBytes + 4 + c] + copy[idx + rowBytes - 4 + c] + copy[idx + rowBytes + 4 + c])
+                        ) / 12;
+                        const diff = center - blur;
+                        const effectiveAmount = Math.abs(diff) < 3 ? amount * 0.15 : amount;
+                        const sharpened = center + effectiveAmount * diff;
+                        data[idx + c] = Math.max(0, Math.min(255, sharpened));
+                    }
+                }
+            }
+        }
+
+        function drawHighDetailScaledImage(targetCtx, img, targetW, targetH, rotationDeg, isRotated90) {
+            const srcW = img.width;
+            const srcH = img.height;
+            const destRawW = isRotated90 ? targetH : targetW;
+            const destRawH = isRotated90 ? targetW : targetH;
+
+            let workCanvas = document.createElement('canvas');
+            workCanvas.width = srcW;
+            workCanvas.height = srcH;
+            let wCtx = workCanvas.getContext('2d');
+            wCtx.imageSmoothingEnabled = true;
+            wCtx.imageSmoothingQuality = 'high';
+            wCtx.drawImage(img, 0, 0);
+
+            while (workCanvas.width * 1.5 < destRawW || workCanvas.height * 1.5 < destRawH) {
+                const nextW = Math.min(destRawW, Math.round(workCanvas.width * 1.5));
+                const nextH = Math.min(destRawH, Math.round(workCanvas.height * 1.5));
+                const stepCanvas = document.createElement('canvas');
+                stepCanvas.width = nextW;
+                stepCanvas.height = nextH;
+                const sCtx = stepCanvas.getContext('2d');
+                sCtx.imageSmoothingEnabled = true;
+                sCtx.imageSmoothingQuality = 'high';
+                sCtx.drawImage(workCanvas, 0, 0, nextW, nextH);
+                workCanvas = stepCanvas;
+            }
+
+            targetCtx.save();
+            targetCtx.imageSmoothingEnabled = true;
+            targetCtx.imageSmoothingQuality = 'high';
+            targetCtx.clearRect(0, 0, targetW, targetH);
+            targetCtx.translate(targetW / 2, targetH / 2);
+            targetCtx.rotate((rotationDeg * Math.PI) / 180);
+            targetCtx.drawImage(workCanvas, -destRawW / 2, -destRawH / 2, destRawW, destRawH);
+            targetCtx.restore();
+        }
+
+        function renderActivePage(showLaserAnimation = false) {
+            if (activePageIndex === -1) return;
+            const page = scannedPages[activePageIndex];
+            const overlay = document.getElementById('processing-overlay');
+
+            if (showLaserAnimation) {
+                overlay.classList.remove('hidden');
+            }
+
+            const img = new Image();
+            img.onload = () => {
+                const isRotated90 = page.rotation === 90 || page.rotation === 270;
+                const w = isRotated90 ? img.height : img.width;
+                const h = isRotated90 ? img.width : img.height;
+
+                const maxDim = 7000;
+                const minHdDim = 4500;
+                let scale = 1;
+                if (w > maxDim || h > maxDim) {
+                    scale = Math.min(maxDim / w, maxDim / h);
+                } else if (Math.max(w, h) < minHdDim) {
+                    scale = minHdDim / Math.max(w, h);
+                }
+
+                canvas.width = Math.round(w * scale);
+                canvas.height = Math.round(h * scale);
+
+                document.getElementById('scan-dimensions').innerText = `${canvas.width} × ${canvas.height} px • 1000 DPI Master`;
+
+                drawHighDetailScaledImage(ctx, img, canvas.width, canvas.height, page.rotation, isRotated90);
+
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data;
+
+                const brightness = page.brightness;
+                const contrastFactor = (259 * (page.contrast + 255)) / (255 * (259 - page.contrast));
+                const filter = page.filter;
+
+                if (filter === 'proprint' || filter === 'magic' || filter === 'bw') {
+                    normalizePaperIllumination(data, canvas.width, canvas.height, filter === 'proprint' ? 0.95 : 0.85);
+                }
+
+                for (let i = 0; i < data.length; i += 4) {
+                    let r = data[i];
+                    let g = data[i + 1];
+                    let b = data[i + 2];
+
+                    r = contrastFactor * (r - 128) + 128 + brightness;
+                    g = contrastFactor * (g - 128) + 128 + brightness;
+                    b = contrastFactor * (b - 128) + 128 + brightness;
+
+                    r = Math.max(0, Math.min(255, r));
+                    g = Math.max(0, Math.min(255, g));
+                    b = Math.max(0, Math.min(255, b));
+
+                    if (filter === 'grayscale') {
+                        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                        r = g = b = gray;
+                    } else if (filter === 'bw') {
+                        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                        const bw = gray > 180 ? 255 : (gray < 110 ? 0 : ((gray - 110) / 70) * 255);
+                        r = g = b = Math.max(0, Math.min(255, bw));
+                    } else if (filter === 'proprint') {
+                        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                        const maxC = Math.max(r, g, b);
+                        const minC = Math.min(r, g, b);
+                        const sat = maxC - minC;
+
+                        if (lum > 192 && sat < 40) {
+                            r = g = b = 255;
+                        } else if (lum > 158 && sat < 34) {
+                            const t = (lum - 158) / 34;
+                            const smoothT = t * t * (3 - 2 * t);
+                            r = r + (255 - r) * smoothT;
+                            g = g + (255 - g) * smoothT;
+                            b = b + (255 - b) * smoothT;
+                        } else if (sat < 34) {
+                            const darkBoost = Math.max(0, Math.pow(lum / 255, 1.45) * 230 - 10);
+                            r = g = b = darkBoost;
+                        } else {
+                            const mid = (r + g + b) / 3;
+                            const vibrance = 1.35;
+                            r = Math.max(0, Math.min(255, mid + (r - mid) * vibrance - 5));
+                            g = Math.max(0, Math.min(255, mid + (g - mid) * vibrance - 5));
+                            b = Math.max(0, Math.min(255, mid + (b - mid) * vibrance - 5));
+                        }
+                    } else if (filter === 'magic') {
+                        const avg = (r + g + b) / 3;
+                        const maxChannel = Math.max(r, g, b);
+                        const minChannel = Math.min(r, g, b);
+                        const saturation = maxChannel - minChannel;
+
+                        if (avg > 178 && saturation < 44) {
+                            r = g = b = 255;
+                        } else if (avg > 138 && saturation < 34) {
+                            const boost = (avg - 138) * 3.1;
+                            r = Math.min(255, r + boost);
+                            g = Math.min(255, g + boost);
+                            b = Math.min(255, b + boost);
+                        } else {
+                            const mid = (r + g + b) / 3;
+                            r = Math.max(0, Math.min(255, mid + (r - mid) * 1.25 * 0.88));
+                            g = Math.max(0, Math.min(255, mid + (g - mid) * 1.25 * 0.88));
+                            b = Math.max(0, Math.min(255, mid + (b - mid) * 1.25 * 0.88));
+                        }
+                    }
+
+                    data[i] = r;
+                    data[i + 1] = g;
+                    data[i + 2] = b;
+                }
+
+                if (filter === 'proprint' || filter === 'magic' || filter === 'bw') {
+                    applyTextSharpening(data, canvas.width, canvas.height, filter === 'proprint' ? 0.90 : 0.70);
+                } else {
+                    applyTextSharpening(data, canvas.width, canvas.height, 0.35);
+                }
+
+                ctx.putImageData(imageData, 0, 0);
+
+                page.processedDataUrl = canvas.toDataURL('image/png');
+                updateTrayThumbnail(activePageIndex, page.processedDataUrl);
+
+                if (isCropping) {
+                    drawCropOverlay();
+                }
+
+                if (showLaserAnimation) {
+                    setTimeout(() => overlay.classList.add('hidden'), 450);
+                } else {
+                    overlay.classList.add('hidden');
+                }
+            };
+            img.src = page.originalDataUrl;
+        }
+
+        // ================= FITUR CROP PERSPEKTIF FLEKSIBEL =================
+        function resetCropCorners() {
+            cropPoints = {
+                tl: { x: 0.10, y: 0.10 },
+                tr: { x: 0.90, y: 0.10 },
+                br: { x: 0.90, y: 0.90 },
+                bl: { x: 0.10, y: 0.90 }
+            };
+            renderActivePage(false);
+        }
+
+        function toggleCropMode() {
+            if (activePageIndex === -1) return;
+            isCropping = !isCropping;
+            const controls = document.getElementById('crop-controls');
+            
+            if (isCropping) {
+                resetCropCorners();
+                controls.classList.remove('hidden');
+            } else {
+                controls.classList.add('hidden');
+                renderActivePage(false);
+            }
+        }
+
+        function cancelCrop() {
+            isCropping = false;
+            document.getElementById('crop-controls').classList.add('hidden');
+            renderActivePage(false);
+        }
+
+        function drawCropOverlay() {
+            const w = canvas.width;
+            const h = canvas.height;
+
+            const pTL = { x: cropPoints.tl.x * w, y: cropPoints.tl.y * h };
+            const pTR = { x: cropPoints.tr.x * w, y: cropPoints.tr.y * h };
+            const pBR = { x: cropPoints.br.x * w, y: cropPoints.br.y * h };
+            const pBL = { x: cropPoints.bl.x * w, y: cropPoints.bl.y * h };
+
+            ctx.save();
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.58)';
+            ctx.beginPath();
+            ctx.rect(0, 0, w, h);
+            ctx.moveTo(pTL.x, pTL.y);
+            ctx.lineTo(pBL.x, pBL.y);
+            ctx.lineTo(pBR.x, pBR.y);
+            ctx.lineTo(pTR.x, pTR.y);
+            ctx.closePath();
+            ctx.fill('evenodd');
+            ctx.restore();
+
+            ctx.save();
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = Math.max(3, w / 220);
+            ctx.beginPath();
+            ctx.moveTo(pTL.x, pTL.y);
+            ctx.lineTo(pTR.x, pTR.y);
+            ctx.lineTo(pBR.x, pBR.y);
+            ctx.lineTo(pBL.x, pBL.y);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function getCanvasCoords(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                x: (clientX - rect.left) / rect.width,
+                y: (clientY - rect.top) / rect.height
+            };
+        }
+
+        function onPointerDown(e) {
+            if (!isCropping) return;
+            const pos = getCanvasCoords(e);
+            const threshold = 0.09;
+            let closestCorner = null;
+            let minDist = threshold;
+
+            for (const key of ['tl', 'tr', 'br', 'bl']) {
+                const pt = cropPoints[key];
+                const dist = Math.hypot(pos.x - pt.x, pos.y - pt.y);
+                if (dist < minDist) {
+                    minDist = dist;
+                    closestCorner = key;
+                }
+            }
+
+            if (closestCorner) {
+                draggingCorner = closestCorner;
+                e.preventDefault();
+                renderActivePage(false);
+            }
+        }
+
+        function onPointerMove(e) {
+            if (!isCropping || !draggingCorner) return;
+            e.preventDefault();
+            const pos = getCanvasCoords(e);
+            cropPoints[draggingCorner].x = Math.max(0, Math.min(1, pos.x));
+            cropPoints[draggingCorner].y = Math.max(0, Math.min(1, pos.y));
+            renderActivePage(false);
+        }
+
+        function onPointerUp() {
+            if (draggingCorner) {
+                draggingCorner = null;
+                if (isCropping) renderActivePage(false);
+            }
+        }
+
+        canvas.addEventListener('mousedown', onPointerDown);
+        window.addEventListener('mousemove', onPointerMove);
+        window.addEventListener('mouseup', onPointerUp);
+        canvas.addEventListener('touchstart', onPointerDown, { passive: false });
+        window.addEventListener('touchmove', onPointerMove, { passive: false });
+        window.addEventListener('touchend', onPointerUp);
+
+        function solveLinearSystem(A, b) {
+            const n = b.length;
+            const M = A.map((row, i) => [...row, b[i]]);
+
+            for (let i = 0; i < n; i++) {
+                let maxRow = i;
+                for (let k = i + 1; k < n; k++) {
+                    if (Math.abs(M[k][i]) > Math.abs(M[maxRow][i])) maxRow = k;
+                }
+                [M[i], M[maxRow]] = [M[maxRow], M[i]];
+                if (Math.abs(M[i][i]) < 1e-10) continue;
+
+                for (let k = i + 1; k < n; k++) {
+                    const factor = M[k][i] / M[i][i];
+                    for (let j = i; j <= n; j++) {
+                        M[k][j] -= factor * M[i][j];
+                    }
+                }
+            }
+
+            const x = new Array(n).fill(0);
+            for (let i = n - 1; i >= 0; i--) {
+                let sum = M[i][n];
+                for (let j = i + 1; j < n; j++) {
+                    sum -= M[i][j] * x[j];
+                }
+                x[i] = Math.abs(M[i][i]) > 1e-10 ? sum / M[i][i] : 0;
+            }
+            return x;
+        }
+
+        function computeHomographyMatrix(dstPts, srcPts) {
+            const A = [];
+            const b = [];
+
+            for (let i = 0; i < 4; i++) {
+                const x = dstPts[i].x;
+                const y = dstPts[i].y;
+                const u = srcPts[i].x;
+                const v = srcPts[i].y;
+
+                A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]);
+                b.push(u);
+                A.push([0, 0, 0, x, y, 1, -v * x, -v * y]);
+                b.push(v);
+            }
+
+            const h = solveLinearSystem(A, b);
+            return [
+                [h[0], h[1], h[2]],
+                [h[3], h[4], h[5]],
+                [h[6], h[7], 1]
+            ];
+        }
+
+        function applyCrop() {
+            if (!isCropping || activePageIndex === -1) return;
+            const page = scannedPages[activePageIndex];
+
+            isCropping = false;
+            document.getElementById('crop-controls').classList.add('hidden');
+            document.getElementById('processing-overlay').classList.remove('hidden');
+
+            const img = new Image();
+            img.onload = () => {
+                const isRotated90 = page.rotation === 90 || page.rotation === 270;
+                const fullW = isRotated90 ? img.height : img.width;
+                const fullH = isRotated90 ? img.width : img.height;
+
+                const srcCanvas = document.createElement('canvas');
+                srcCanvas.width = fullW;
+                srcCanvas.height = fullH;
+                const sCtx = srcCanvas.getContext('2d');
+                sCtx.translate(fullW / 2, fullH / 2);
+                sCtx.rotate((page.rotation * Math.PI) / 180);
+                const drawW = isRotated90 ? fullH : fullW;
+                const drawH = isRotated90 ? fullW : fullH;
+                sCtx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+
+                const srcPts = [
+                    { x: cropPoints.tl.x * fullW, y: cropPoints.tl.y * fullH },
+                    { x: cropPoints.tr.x * fullW, y: cropPoints.tr.y * fullH },
+                    { x: cropPoints.br.x * fullW, y: cropPoints.br.y * fullH },
+                    { x: cropPoints.bl.x * fullW, y: cropPoints.bl.y * fullH }
+                ];
+
+                const topWidth = Math.hypot(srcPts[1].x - srcPts[0].x, srcPts[1].y - srcPts[0].y);
+                const bottomWidth = Math.hypot(srcPts[2].x - srcPts[3].x, srcPts[2].y - srcPts[3].y);
+                const leftHeight = Math.hypot(srcPts[3].x - srcPts[0].x, srcPts[3].y - srcPts[0].y);
+                const rightHeight = Math.hypot(srcPts[2].x - srcPts[1].x, srcPts[2].y - srcPts[1].y);
+
+                let outW = Math.round(Math.max(topWidth, bottomWidth));
+                let outH = Math.round(Math.max(leftHeight, rightHeight));
+
+                const maxOutDim = 7000;
+                if (outW > maxOutDim || outH > maxOutDim) {
+                    const scale = Math.min(maxOutDim / outW, maxOutDim / outH);
+                    outW = Math.round(outW * scale);
+                    outH = Math.round(outH * scale);
+                }
+                outW = Math.max(50, outW);
+                outH = Math.max(50, outH);
+
+                const dstPts = [
+                    { x: 0, y: 0 },
+                    { x: outW, y: 0 },
+                    { x: outW, y: outH },
+                    { x: 0, y: outH }
+                ];
+
+                const H = computeHomographyMatrix(dstPts, srcPts);
+                const srcImgData = sCtx.getImageData(0, 0, fullW, fullH);
+                const srcData = srcImgData.data;
+
+                const dstCanvas = document.createElement('canvas');
+                dstCanvas.width = outW;
+                dstCanvas.height = outH;
+                const dCtx = dstCanvas.getContext('2d');
+                const dstImgData = dCtx.createImageData(outW, outH);
+                const dstData = dstImgData.data;
+
+                const h00 = H[0][0], h01 = H[0][1], h02 = H[0][2];
+                const h10 = H[1][0], h11 = H[1][1], h12 = H[1][2];
+                const h20 = H[2][0], h21 = H[2][1];
+
+                for (let y = 0; y < outH; y++) {
+                    for (let x = 0; x < outW; x++) {
+                        const denom = h20 * x + h21 * y + 1;
+                        const u = (h00 * x + h01 * y + h02) / denom;
+                        const v = (h10 * x + h11 * y + h12) / denom;
+                        const dstIdx = (y * outW + x) * 4;
+
+                        if (u >= 0 && u < fullW - 1 && v >= 0 && v < fullH - 1) {
+                            const x0 = Math.floor(u);
+                            const y0 = Math.floor(v);
+                            const dx = u - x0;
+                            const dy = v - y0;
+
+                            const idx00 = (y0 * fullW + x0) * 4;
+                            const idx10 = idx00 + 4;
+                            const idx01 = idx00 + fullW * 4;
+                            const idx11 = idx01 + 4;
+
+                            const w00 = (1 - dx) * (1 - dy);
+                            const w10 = dx * (1 - dy);
+                            const w01 = (1 - dx) * dy;
+                            const w11 = dx * dy;
+
+                            dstData[dstIdx]     = srcData[idx00]     * w00 + srcData[idx10]     * w10 + srcData[idx01]     * w01 + srcData[idx11]     * w11;
+                            dstData[dstIdx + 1] = srcData[idx00 + 1] * w00 + srcData[idx10 + 1] * w10 + srcData[idx01 + 1] * w01 + srcData[idx11 + 1] * w11;
+                            dstData[dstIdx + 2] = srcData[idx00 + 2] * w00 + srcData[idx10 + 2] * w10 + srcData[idx01 + 2] * w01 + srcData[idx11 + 2] * w11;
+                            dstData[dstIdx + 3] = 255;
+                        } else {
+                            dstData[dstIdx] = 255;
+                            dstData[dstIdx + 1] = 255;
+                            dstData[dstIdx + 2] = 255;
+                            dstData[dstIdx + 3] = 255;
+                        }
+                    }
+                }
+
+                dCtx.putImageData(dstImgData, 0, 0);
+
+                page.originalDataUrl = dstCanvas.toDataURL('image/png');
+                page.rotation = 0;
+                renderActivePage(true);
+                showToast('Dokumen berhasil dipotong & diluruskan dalam resolusi Master 1000 DPI!', 'success');
+            };
+            img.src = page.originalDataUrl;
+        }
+
+        // ================= TRAY HALAMAN & AKSI HAPUS =================
+        function toggleSelectMode() {
+            isSelectMode = !isSelectMode;
+            selectedPageIds.clear();
+            updateTrayUI();
+        }
+
+        function togglePageSelection(pageId) {
+            if (selectedPageIds.has(pageId)) {
+                selectedPageIds.delete(pageId);
+            } else {
+                selectedPageIds.add(pageId);
+            }
+            updateTrayUI();
+        }
+
+        function toggleSelectAllPages(checked) {
+            selectedPageIds.clear();
+            if (checked) {
+                scannedPages.forEach(p => selectedPageIds.add(p.id));
+            }
+            updateTrayUI();
+        }
+
+        function updateTrayUI() {
+            const trayEmpty = document.getElementById('tray-empty');
+            const pagesGrid = document.getElementById('pages-grid');
+            const btnExport = document.getElementById('btn-export-pdf');
+            const btnPrint = document.getElementById('btn-print');
+            const btnClear = document.getElementById('btn-clear-all');
+            const btnSelectMode = document.getElementById('btn-select-mode');
+            const selectModeLabel = document.getElementById('select-mode-label');
+            const bulkDeleteBar = document.getElementById('bulk-delete-bar');
+            const checkboxSelectAll = document.getElementById('checkbox-select-all');
+            const selectedCountEl = document.getElementById('selected-count');
+            const btnDeleteSelected = document.getElementById('btn-delete-selected');
+            const pageBadge = document.getElementById('page-badge');
+            const singleDlBox = document.getElementById('single-download-box');
+
+            if (scannedPages.length === 0) {
+                isSelectMode = false;
+                selectedPageIds.clear();
+                trayEmpty.classList.remove('hidden');
+                pagesGrid.classList.add('hidden');
+                btnExport.disabled = true;
+                btnPrint.disabled = true;
+                btnClear.classList.add('hidden');
+                btnSelectMode.classList.add('hidden');
+                bulkDeleteBar.classList.add('hidden');
+                pageBadge.classList.add('hidden');
+                singleDlBox.classList.add('hidden');
+                switchMode('upload');
+                return;
+            }
+
+            const validIds = new Set(scannedPages.map(p => p.id));
+            for (const id of selectedPageIds) {
+                if (!validIds.has(id)) selectedPageIds.delete(id);
+            }
+
+            trayEmpty.classList.add('hidden');
+            pagesGrid.classList.remove('hidden');
+            pagesGrid.classList.add('grid');
+            btnExport.disabled = false;
+            btnPrint.disabled = false;
+            btnClear.classList.remove('hidden');
+            btnSelectMode.classList.remove('hidden');
+            pageBadge.classList.remove('hidden');
+            pageBadge.innerText = scannedPages.length;
+            singleDlBox.classList.remove('hidden');
+
+            if (isSelectMode) {
+                btnSelectMode.className = 'text-xs px-2.5 py-1 rounded-lg bg-slate-800 text-white font-medium transition flex items-center gap-1';
+                selectModeLabel.innerText = 'Selesai';
+                bulkDeleteBar.classList.remove('hidden');
+                selectedCountEl.innerText = selectedPageIds.size;
+                checkboxSelectAll.checked = selectedPageIds.size === scannedPages.length && scannedPages.length > 0;
+                btnDeleteSelected.disabled = selectedPageIds.size === 0;
+            } else {
+                btnSelectMode.className = 'text-xs px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium transition flex items-center gap-1';
+                selectModeLabel.innerText = 'Pilih';
+                bulkDeleteBar.classList.add('hidden');
+            }
+
+            pagesGrid.innerHTML = '';
+            scannedPages.forEach((page, idx) => {
+                const isActive = idx === activePageIndex;
+                const isChecked = selectedPageIds.has(page.id);
+                const card = document.createElement('div');
+                
+                let borderStyle = 'border-slate-200 hover:border-slate-300';
+                if (isSelectMode && isChecked) {
+                    borderStyle = 'border-rose-500 ring-2 ring-rose-500/25';
+                } else if (!isSelectMode && isActive) {
+                    borderStyle = 'border-blue-600 ring-2 ring-blue-600/20';
+                }
+
+                card.className = `group relative rounded-xl border-2 overflow-hidden bg-slate-100 cursor-pointer transition ${borderStyle}`;
+                card.onclick = () => {
+                    if (isSelectMode) {
+                        togglePageSelection(page.id);
+                    } else {
+                        selectPage(idx);
+                    }
+                };
+
+                card.innerHTML = `
+                    ${isSelectMode ? `
+                        <div class="absolute top-2 left-2 z-10 w-5 h-5 rounded-md flex items-center justify-center shadow-sm transition ${isChecked ? 'bg-rose-600 text-white' : 'bg-white/95 border border-slate-300 text-transparent'}">
+                            <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                        </div>
+                    ` : ''}
+                    <div class="aspect-[1/1.35] w-full overflow-hidden bg-white flex items-center justify-center p-1">
+                        <img id="thumb-${idx}" src="${page.processedDataUrl}" alt="Halaman ${idx + 1}" class="w-full h-full object-contain ${isSelectMode && isChecked ? 'opacity-85' : ''}">
+                    </div>
+                    <div class="px-2 py-1.5 bg-white border-t border-slate-100 flex items-center justify-between">
+                        <span class="text-[11px] font-bold ${isSelectMode && isChecked ? 'text-rose-600' : (isActive ? 'text-blue-600' : 'text-slate-600')}">Hal. ${idx + 1}</span>
+                        <button type="button" onclick="event.stopPropagation(); confirmDeletePage(${idx})" 
+                            class="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition" title="Hapus Halaman">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+                `;
+                pagesGrid.appendChild(card);
+            });
+
+            lucide.createIcons();
+        }
+
+        function updateTrayThumbnail(index, dataUrl) {
+            const thumb = document.getElementById(`thumb-${index}`);
+            if (thumb) thumb.src = dataUrl;
+        }
+
+        let pendingDeleteAction = null;
+
+        function confirmDeleteSelectedPages() {
+            if (selectedPageIds.size === 0) return;
+            const count = selectedPageIds.size;
+            document.getElementById('confirm-title').innerText = `Hapus ${count} Halaman Terpilih?`;
+            document.getElementById('confirm-desc').innerText = `${count} halaman yang Anda pilih akan dihapus dari dokumen.`;
+            document.getElementById('confirm-modal').classList.remove('hidden');
+
+            pendingDeleteAction = () => {
+                const activePageId = scannedPages[activePageIndex]?.id;
+                scannedPages = scannedPages.filter(p => !selectedPageIds.has(p.id));
+                selectedPageIds.clear();
+                isSelectMode = false;
+
+                if (scannedPages.length === 0) {
+                    activePageIndex = -1;
+                } else {
+                    const newIdx = scannedPages.findIndex(p => p.id === activePageId);
+                    activePageIndex = newIdx !== -1 ? newIdx : Math.min(activePageIndex, scannedPages.length - 1);
+                }
+
+                updateTrayUI();
+                if (activePageIndex !== -1) {
+                    syncControlsWithActivePage();
+                    renderActivePage(false);
+                }
+                showToast(`${count} halaman berhasil dihapus`, 'info');
+            };
+        }
+
+        function confirmDeletePage(index) {
+            document.getElementById('confirm-title').innerText = `Hapus Halaman ${index + 1}?`;
+            document.getElementById('confirm-desc').innerText = 'Halaman ini akan dihapus dari antrean dokumen Anda.';
+            document.getElementById('confirm-modal').classList.remove('hidden');
+            
+            pendingDeleteAction = () => {
+                scannedPages.splice(index, 1);
+                if (scannedPages.length === 0) {
+                    activePageIndex = -1;
+                } else if (activePageIndex >= scannedPages.length) {
+                    activePageIndex = scannedPages.length - 1;
+                }
+                updateTrayUI();
+                if (activePageIndex !== -1) {
+                    syncControlsWithActivePage();
+                    renderActivePage(false);
+                }
+                showToast('Halaman dihapus', 'info');
+            };
+        }
+
+        function clearAllPages() {
+            document.getElementById('confirm-title').innerText = 'Hapus Semua Halaman?';
+            document.getElementById('confirm-desc').innerText = `Seluruh (${scannedPages.length}) halaman terpindai akan dihapus.`;
+            document.getElementById('confirm-modal').classList.remove('hidden');
+
+            pendingDeleteAction = () => {
+                scannedPages = [];
+                activePageIndex = -1;
+                updateTrayUI();
+                showToast('Semua halaman dibersihkan', 'info');
+            };
+        }
+
+        function closeConfirmModal() {
+            document.getElementById('confirm-modal').classList.add('hidden');
+            pendingDeleteAction = null;
+        }
+
+        document.getElementById('confirm-yes-btn').onclick = () => {
+            if (pendingDeleteAction) pendingDeleteAction();
+            closeConfirmModal();
+        };
+
+        function downloadCurrentImage() {
+            if (activePageIndex === -1) return;
+            const page = scannedPages[activePageIndex];
+            const filename = (document.getElementById('doc-filename').value || 'Scan_Dokumen').trim();
+            
+            const link = document.createElement('a');
+            link.download = `${filename}_Hal_${activePageIndex + 1}.jpg`;
+            link.href = page.processedDataUrl;
+            link.click();
+            showToast('Gambar halaman berhasil diunduh!', 'success');
+        }
+
+        async function exportSinglePageToPDF() {
+            if (activePageIndex === -1 || !scannedPages[activePageIndex]) return;
+            const filename = (document.getElementById('doc-filename').value || 'Scan_Dokumen').trim();
+            await generatePDFFromPages([scannedPages[activePageIndex]], `${filename}_Hal_${activePageIndex + 1}.pdf`);
+        }
+
+        async function exportAllToPDF() {
+            if (scannedPages.length === 0) return;
+            const filename = (document.getElementById('doc-filename').value || 'Scan_Dokumen').trim();
+            await generatePDFFromPages(scannedPages, `${filename}.pdf`);
+        }
+
+        async function generatePDFFromPages(pagesList, outputFilename) {
+            if (!window.jspdf || !window.jspdf.jsPDF) {
+                showToast('Pustaka PDF sedang dimuat, coba sesaat lagi.', 'error');
+                return;
+            }
+
+            const { jsPDF } = window.jspdf;
+            const paperSize = document.getElementById('paper-size').value;
+            const margin = parseInt(document.getElementById('paper-margin').value, 10);
+
+            showToast('Menyusun file PDF...', 'info');
+
+            try {
+                const pdf = new jsPDF({
+                    orientation: 'portrait',
+                    unit: 'mm',
+                    format: paperSize
+                });
+
+                const pageWidth = pdf.internal.pageSize.getWidth();
+                const pageHeight = pdf.internal.pageSize.getHeight();
+                const usableW = pageWidth - margin * 2;
+                const usableH = pageHeight - margin * 2;
+
+                for (let i = 0; i < pagesList.length; i++) {
+                    if (i > 0) pdf.addPage();
+                    const page = pagesList[i];
+
+                    await new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const imgRatio = img.width / img.height;
+                            const boxRatio = usableW / usableH;
+
+                            let finalW, finalH;
+                            if (imgRatio > boxRatio) {
+                                finalW = usableW;
+                                finalH = usableW / imgRatio;
+                            } else {
+                                finalH = usableH;
+                                finalW = usableH * imgRatio;
+                            }
+
+                            const offsetX = margin + (usableW - finalW) / 2;
+                            const offsetY = margin + (usableH - finalH) / 2;
+
+                            pdf.addImage(page.processedDataUrl, 'PNG', offsetX, offsetY, finalW, finalH, undefined, 'FAST');
+                            resolve();
+                        };
+                        img.onerror = reject;
+                        img.src = page.processedDataUrl;
+                    });
+                }
+
+                pdf.save(outputFilename);
+                showToast(`PDF "${outputFilename}" berhasil diunduh!`, 'success');
+            } catch (err) {
+                console.error('PDF generation error:', err);
+                showToast('Gagal membuat file PDF. Silakan coba lagi.', 'error');
+            }
+        }
+
+        function printDocuments() {
+            if (scannedPages.length === 0) return;
+            const printArea = document.getElementById('print-area');
+            const marginMm = parseInt(document.getElementById('paper-margin').value, 10);
+            printArea.innerHTML = '';
+
+            scannedPages.forEach((page, idx) => {
+                const pageDiv = document.createElement('div');
+                pageDiv.style.pageBreakAfter = idx < scannedPages.length - 1 ? 'always' : 'auto';
+                pageDiv.style.breakAfter = idx < scannedPages.length - 1 ? 'page' : 'auto';
+                pageDiv.style.display = 'flex';
+                pageDiv.style.justifyContent = 'center';
+                pageDiv.style.alignItems = 'center';
+                pageDiv.style.width = '100vw';
+                pageDiv.style.height = '100vh';
+                pageDiv.style.boxSizing = 'border-box';
+                pageDiv.style.padding = `${marginMm}mm`;
+                pageDiv.style.backgroundColor = '#ffffff';
+
+                const img = document.createElement('img');
+                img.src = page.processedDataUrl;
+                img.style.maxWidth = '100%';
+                img.style.maxHeight = '100%';
+                img.style.width = 'auto';
+                img.style.height = 'auto';
+                img.style.objectFit = 'contain';
+
+                pageDiv.appendChild(img);
+                printArea.appendChild(pageDiv);
+            });
+
+            setTimeout(() => {
+                window.print();
+            }, 150);
+        }
+    </script>
+</body>
+</html>
