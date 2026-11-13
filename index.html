@@ -751,24 +751,245 @@
         }
 
         // ================= MANAJEMEN HALAMAN & PEMROSESAN GAMBAR =================
-        function addScannedPage(dataUrl) {
-            const newPage = {
-                id: Date.now() + Math.random(),
-                originalDataUrl: dataUrl,
-                processedDataUrl: dataUrl,
-                filter: 'proprint', // Default mode Cetak Pro jernih & bebas bayangan
-                brightness: 8,
-                contrast: 22,
-                rotation: 0
+        function detectDocumentBounds(img) {
+            const analysisMax = 320;
+            const scale = Math.min(1, analysisMax / Math.max(img.width, img.height));
+            const w = Math.max(40, Math.round(img.width * scale));
+            const h = Math.max(40, Math.round(img.height * scale));
+
+            const c = document.createElement('canvas');
+            c.width = w;
+            c.height = h;
+            const cCtx = c.getContext('2d');
+            cCtx.drawImage(img, 0, 0, w, h);
+            const data = cCtx.getImageData(0, 0, w, h).data;
+
+            // Estimasi warna latar belakang dari area tepi gambar (meja / background)
+            let borderLumSum = 0;
+            let borderCount = 0;
+            const borderMargin = Math.max(2, Math.floor(Math.min(w, h) * 0.04));
+
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    if (x < borderMargin || x >= w - borderMargin || y < borderMargin || y >= h - borderMargin) {
+                        const idx = (y * w + x) * 4;
+                        const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                        borderLumSum += lum;
+                        borderCount++;
+                    }
+                }
+            }
+
+            const avgBorderLum = borderLumSum / Math.max(1, borderCount);
+            // Jika tepi sudah putih bersih (dokumen penuh), tidak perlu auto-crop ekstrem
+            if (avgBorderLum > 225) {
+                return null;
+            }
+
+            // Buat peta masker piksel kertas (lebih terang signifikan dibanding latar meja)
+            const threshold = Math.min(220, avgBorderLum + 28);
+            const mask = new Uint8Array(w * h);
+            let paperPixels = 0;
+
+            for (let i = 0; i < w * h; i++) {
+                const idx = i * 4;
+                const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                const sat = Math.max(r, g, b) - Math.min(r, g, b);
+                if (lum > threshold && sat < 75) {
+                    mask[i] = 1;
+                    paperPixels++;
+                }
+            }
+
+            const coverage = paperPixels / (w * h);
+            if (coverage < 0.08 || coverage > 0.94) {
+                return null;
+            }
+
+            // Cari 4 sudut ekstrim poligon kertas:
+            // TL: min(x + y), TR: max(x - y), BR: max(x + y), BL: min(x - y)
+            let tl = { x: 0, y: 0, score: Infinity };
+            let tr = { x: w - 1, y: 0, score: -Infinity };
+            let br = { x: w - 1, y: h - 1, score: -Infinity };
+            let bl = { x: 0, y: h - 1, score: Infinity };
+
+            for (let y = 1; y < h - 1; y++) {
+                for (let x = 1; x < w - 1; x++) {
+                    const pos = y * w + x;
+                    if (!mask[pos]) continue;
+
+                    // Pastikan bukan noise titik tunggal (minimal 3 tetangga aktif)
+                    const neighbors = mask[pos - 1] + mask[pos + 1] + mask[pos - w] + mask[pos + w];
+                    if (neighbors < 3) continue;
+
+                    const sum = x + y;
+                    const diff = x - y;
+
+                    if (sum < tl.score) tl = { x, y, score: sum };
+                    if (diff > tr.score) tr = { x, y, score: diff };
+                    if (sum > br.score) br = { x, y, score: sum };
+                    if (diff < bl.score) bl = { x, y, score: diff };
+                }
+            }
+
+            const norm = {
+                tl: { x: Math.max(0, tl.x / w), y: Math.max(0, tl.y / h) },
+                tr: { x: Math.min(1, tr.x / w), y: Math.max(0, tr.y / h) },
+                br: { x: Math.min(1, br.x / w), y: Math.min(1, br.y / h) },
+                bl: { x: Math.max(0, bl.x / w), y: Math.min(1, bl.y / h) }
             };
 
-            scannedPages.push(newPage);
-            activePageIndex = scannedPages.length - 1;
-            
-            switchMode('editor');
-            syncControlsWithActivePage();
-            renderActivePage(true);
-            updateTrayUI();
+            const boxW = Math.max(norm.tr.x - norm.tl.x, norm.br.x - norm.bl.x);
+            const boxH = Math.max(norm.bl.y - norm.tl.y, norm.br.y - norm.tr.y);
+            if (boxW < 0.2 || boxH < 0.2) return null;
+
+            return norm;
+        }
+
+        function warpPerspectiveFromImage(img, points, rotationDeg = 0) {
+            const isRotated90 = rotationDeg === 90 || rotationDeg === 270;
+            const fullW = isRotated90 ? img.height : img.width;
+            const fullH = isRotated90 ? img.width : img.height;
+
+            const srcCanvas = document.createElement('canvas');
+            srcCanvas.width = fullW;
+            srcCanvas.height = fullH;
+            const sCtx = srcCanvas.getContext('2d');
+            sCtx.translate(fullW / 2, fullH / 2);
+            sCtx.rotate((rotationDeg * Math.PI) / 180);
+            const drawW = isRotated90 ? fullH : fullW;
+            const drawH = isRotated90 ? fullW : fullH;
+            sCtx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+
+            const srcPts = [
+                { x: points.tl.x * fullW, y: points.tl.y * fullH },
+                { x: points.tr.x * fullW, y: points.tr.y * fullH },
+                { x: points.br.x * fullW, y: points.br.y * fullH },
+                { x: points.bl.x * fullW, y: points.bl.y * fullH }
+            ];
+
+            const topWidth = Math.hypot(srcPts[1].x - srcPts[0].x, srcPts[1].y - srcPts[0].y);
+            const bottomWidth = Math.hypot(srcPts[2].x - srcPts[3].x, srcPts[2].y - srcPts[3].y);
+            const leftHeight = Math.hypot(srcPts[3].x - srcPts[0].x, srcPts[3].y - srcPts[0].y);
+            const rightHeight = Math.hypot(srcPts[2].x - srcPts[1].x, srcPts[2].y - srcPts[1].y);
+
+            let outW = Math.round(Math.max(topWidth, bottomWidth));
+            let outH = Math.round(Math.max(leftHeight, rightHeight));
+
+            const maxOutDim = 7000;
+            if (outW > maxOutDim || outH > maxOutDim) {
+                const scale = Math.min(maxOutDim / outW, maxOutDim / outH);
+                outW = Math.round(outW * scale);
+                outH = Math.round(outH * scale);
+            }
+            outW = Math.max(50, outW);
+            outH = Math.max(50, outH);
+
+            const dstPts = [
+                { x: 0, y: 0 },
+                { x: outW, y: 0 },
+                { x: outW, y: outH },
+                { x: 0, y: outH }
+            ];
+
+            const H = computeHomographyMatrix(dstPts, srcPts);
+            const srcImgData = sCtx.getImageData(0, 0, fullW, fullH);
+            const srcData = srcImgData.data;
+
+            const dstCanvas = document.createElement('canvas');
+            dstCanvas.width = outW;
+            dstCanvas.height = outH;
+            const dCtx = dstCanvas.getContext('2d');
+            const dstImgData = dCtx.createImageData(outW, outH);
+            const dstData = dstImgData.data;
+
+            const h00 = H[0][0], h01 = H[0][1], h02 = H[0][2];
+            const h10 = H[1][0], h11 = H[1][1], h12 = H[1][2];
+            const h20 = H[2][0], h21 = H[2][1];
+
+            for (let y = 0; y < outH; y++) {
+                for (let x = 0; x < outW; x++) {
+                    const denom = h20 * x + h21 * y + 1;
+                    const u = (h00 * x + h01 * y + h02) / denom;
+                    const v = (h10 * x + h11 * y + h12) / denom;
+                    const dstIdx = (y * outW + x) * 4;
+
+                    if (u >= 0 && u < fullW - 1 && v >= 0 && v < fullH - 1) {
+                        const x0 = Math.floor(u);
+                        const y0 = Math.floor(v);
+                        const dx = u - x0;
+                        const dy = v - y0;
+
+                        const idx00 = (y0 * fullW + x0) * 4;
+                        const idx10 = idx00 + 4;
+                        const idx01 = idx00 + fullW * 4;
+                        const idx11 = idx01 + 4;
+
+                        const w00 = (1 - dx) * (1 - dy);
+                        const w10 = dx * (1 - dy);
+                        const w01 = (1 - dx) * dy;
+                        const w11 = dx * dy;
+
+                        dstData[dstIdx]     = srcData[idx00]     * w00 + srcData[idx10]     * w10 + srcData[idx01]     * w01 + srcData[idx11]     * w11;
+                        dstData[dstIdx + 1] = srcData[idx00 + 1] * w00 + srcData[idx10 + 1] * w10 + srcData[idx01 + 1] * w01 + srcData[idx11 + 1] * w11;
+                        dstData[dstIdx + 2] = srcData[idx00 + 2] * w00 + srcData[idx10 + 2] * w10 + srcData[idx01 + 2] * w01 + srcData[idx11 + 2] * w11;
+                        dstData[dstIdx + 3] = 255;
+                    } else {
+                        dstData[dstIdx] = 255;
+                        dstData[dstIdx + 1] = 255;
+                        dstData[dstIdx + 2] = 255;
+                        dstData[dstIdx + 3] = 255;
+                    }
+                }
+            }
+
+            dCtx.putImageData(dstImgData, 0, 0);
+            return dstCanvas.toDataURL('image/png');
+        }
+
+        function addScannedPage(dataUrl) {
+            const img = new Image();
+            img.onload = () => {
+                const detectedBounds = detectDocumentBounds(img);
+                let initialCroppedUrl = dataUrl;
+                let usedPoints = {
+                    tl: { x: 0.08, y: 0.08 },
+                    tr: { x: 0.92, y: 0.08 },
+                    br: { x: 0.92, y: 0.92 },
+                    bl: { x: 0.08, y: 0.92 }
+                };
+
+                if (detectedBounds) {
+                    usedPoints = detectedBounds;
+                    initialCroppedUrl = warpPerspectiveFromImage(img, detectedBounds, 0);
+                }
+
+                const newPage = {
+                    id: Date.now() + Math.random(),
+                    rawUploadDataUrl: dataUrl, // Simpan foto penuh asli agar bisa di-crop manual ulang
+                    originalDataUrl: initialCroppedUrl,
+                    processedDataUrl: initialCroppedUrl,
+                    cropPoints: usedPoints,
+                    filter: 'proprint',
+                    brightness: 8,
+                    contrast: 22,
+                    rotation: 0
+                };
+
+                scannedPages.push(newPage);
+                activePageIndex = scannedPages.length - 1;
+                
+                switchMode('editor');
+                syncControlsWithActivePage();
+                renderActivePage(true);
+                updateTrayUI();
+
+                if (detectedBounds) {
+                    showToast('Tepi dokumen terdeteksi & terpotong otomatis! Klik "Potong (Crop)" jika ingin ubah manual.', 'success');
+                }
+            };
+            img.src = dataUrl;
         }
 
         function selectPage(index) {
@@ -1099,22 +1320,62 @@
         // ================= FITUR CROP PERSPEKTIF FLEKSIBEL =================
         function resetCropCorners() {
             cropPoints = {
-                tl: { x: 0.10, y: 0.10 },
-                tr: { x: 0.90, y: 0.10 },
-                br: { x: 0.90, y: 0.90 },
-                bl: { x: 0.10, y: 0.90 }
+                tl: { x: 0.06, y: 0.06 },
+                tr: { x: 0.94, y: 0.06 },
+                br: { x: 0.94, y: 0.94 },
+                bl: { x: 0.06, y: 0.94 }
             };
-            renderActivePage(false);
+            renderCropSourcePreview();
+        }
+
+        function renderCropSourcePreview() {
+            if (activePageIndex === -1) return;
+            const page = scannedPages[activePageIndex];
+            const img = new Image();
+            img.onload = () => {
+                const isRotated90 = page.rotation === 90 || page.rotation === 270;
+                const w = isRotated90 ? img.height : img.width;
+                const h = isRotated90 ? img.width : img.height;
+
+                const maxPreview = 1600;
+                const scale = Math.min(1, maxPreview / Math.max(w, h));
+                canvas.width = Math.round(w * scale);
+                canvas.height = Math.round(h * scale);
+
+                ctx.save();
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.translate(canvas.width / 2, canvas.height / 2);
+                ctx.rotate((page.rotation * Math.PI) / 180);
+                const drawW = isRotated90 ? canvas.height : canvas.width;
+                const drawH = isRotated90 ? canvas.width : canvas.height;
+                ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+                ctx.restore();
+
+                drawCropOverlay();
+            };
+            // Tampilkan gambar mentah penuh agar pengguna bisa mengatur crop manual dari gambar asli
+            img.src = page.rawUploadDataUrl || page.originalDataUrl;
         }
 
         function toggleCropMode() {
             if (activePageIndex === -1) return;
+            const page = scannedPages[activePageIndex];
             isCropping = !isCropping;
             const controls = document.getElementById('crop-controls');
             
             if (isCropping) {
-                resetCropCorners();
+                if (page.cropPoints) {
+                    cropPoints = JSON.parse(JSON.stringify(page.cropPoints));
+                } else {
+                    cropPoints = {
+                        tl: { x: 0.08, y: 0.08 },
+                        tr: { x: 0.92, y: 0.08 },
+                        br: { x: 0.92, y: 0.92 },
+                        bl: { x: 0.08, y: 0.92 }
+                    };
+                }
                 controls.classList.remove('hidden');
+                renderCropSourcePreview();
             } else {
                 controls.classList.add('hidden');
                 renderActivePage(false);
@@ -1158,6 +1419,25 @@
             ctx.lineTo(pBL.x, pBL.y);
             ctx.closePath();
             ctx.stroke();
+
+            // Gambar 4 titik pegangan sudut (handles) yang jelas untuk ditarik
+            const radius = Math.max(10, w / 65);
+            const corners = [
+                { key: 'tl', pt: pTL },
+                { key: 'tr', pt: pTR },
+                { key: 'br', pt: pBR },
+                { key: 'bl', pt: pBL }
+            ];
+
+            corners.forEach(c => {
+                ctx.beginPath();
+                ctx.arc(c.pt.x, c.pt.y, radius, 0, Math.PI * 2);
+                ctx.fillStyle = draggingCorner === c.key ? '#2563eb' : '#ffffff';
+                ctx.fill();
+                ctx.lineWidth = Math.max(3, radius * 0.3);
+                ctx.strokeStyle = '#2563eb';
+                ctx.stroke();
+            });
             ctx.restore();
         }
 
@@ -1190,7 +1470,23 @@
             if (closestCorner) {
                 draggingCorner = closestCorner;
                 e.preventDefault();
-                renderActivePage(false);
+                renderCropSourcePreview();
+            }
+        }
+
+        function onPointerMove(e) {
+            if (!isCropping || !draggingCorner) return;
+            e.preventDefault();
+            const pos = getCanvasCoords(e);
+            cropPoints[draggingCorner].x = Math.max(0, Math.min(1, pos.x));
+            cropPoints[draggingCorner].y = Math.max(0, Math.min(1, pos.y));
+            renderCropSourcePreview();
+        }
+
+        function onPointerUp() {
+            if (draggingCorner) {
+                draggingCorner = null;
+                if (isCropping) renderCropSourcePreview();
             }
         }
 
@@ -1282,110 +1578,13 @@
 
             const img = new Image();
             img.onload = () => {
-                const isRotated90 = page.rotation === 90 || page.rotation === 270;
-                const fullW = isRotated90 ? img.height : img.width;
-                const fullH = isRotated90 ? img.width : img.height;
-
-                const srcCanvas = document.createElement('canvas');
-                srcCanvas.width = fullW;
-                srcCanvas.height = fullH;
-                const sCtx = srcCanvas.getContext('2d');
-                sCtx.translate(fullW / 2, fullH / 2);
-                sCtx.rotate((page.rotation * Math.PI) / 180);
-                const drawW = isRotated90 ? fullH : fullW;
-                const drawH = isRotated90 ? fullW : fullH;
-                sCtx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
-
-                const srcPts = [
-                    { x: cropPoints.tl.x * fullW, y: cropPoints.tl.y * fullH },
-                    { x: cropPoints.tr.x * fullW, y: cropPoints.tr.y * fullH },
-                    { x: cropPoints.br.x * fullW, y: cropPoints.br.y * fullH },
-                    { x: cropPoints.bl.x * fullW, y: cropPoints.bl.y * fullH }
-                ];
-
-                const topWidth = Math.hypot(srcPts[1].x - srcPts[0].x, srcPts[1].y - srcPts[0].y);
-                const bottomWidth = Math.hypot(srcPts[2].x - srcPts[3].x, srcPts[2].y - srcPts[3].y);
-                const leftHeight = Math.hypot(srcPts[3].x - srcPts[0].x, srcPts[3].y - srcPts[0].y);
-                const rightHeight = Math.hypot(srcPts[2].x - srcPts[1].x, srcPts[2].y - srcPts[1].y);
-
-                let outW = Math.round(Math.max(topWidth, bottomWidth));
-                let outH = Math.round(Math.max(leftHeight, rightHeight));
-
-                const maxOutDim = 7000;
-                if (outW > maxOutDim || outH > maxOutDim) {
-                    const scale = Math.min(maxOutDim / outW, maxOutDim / outH);
-                    outW = Math.round(outW * scale);
-                    outH = Math.round(outH * scale);
-                }
-                outW = Math.max(50, outW);
-                outH = Math.max(50, outH);
-
-                const dstPts = [
-                    { x: 0, y: 0 },
-                    { x: outW, y: 0 },
-                    { x: outW, y: outH },
-                    { x: 0, y: outH }
-                ];
-
-                const H = computeHomographyMatrix(dstPts, srcPts);
-                const srcImgData = sCtx.getImageData(0, 0, fullW, fullH);
-                const srcData = srcImgData.data;
-
-                const dstCanvas = document.createElement('canvas');
-                dstCanvas.width = outW;
-                dstCanvas.height = outH;
-                const dCtx = dstCanvas.getContext('2d');
-                const dstImgData = dCtx.createImageData(outW, outH);
-                const dstData = dstImgData.data;
-
-                const h00 = H[0][0], h01 = H[0][1], h02 = H[0][2];
-                const h10 = H[1][0], h11 = H[1][1], h12 = H[1][2];
-                const h20 = H[2][0], h21 = H[2][1];
-
-                for (let y = 0; y < outH; y++) {
-                    for (let x = 0; x < outW; x++) {
-                        const denom = h20 * x + h21 * y + 1;
-                        const u = (h00 * x + h01 * y + h02) / denom;
-                        const v = (h10 * x + h11 * y + h12) / denom;
-                        const dstIdx = (y * outW + x) * 4;
-
-                        if (u >= 0 && u < fullW - 1 && v >= 0 && v < fullH - 1) {
-                            const x0 = Math.floor(u);
-                            const y0 = Math.floor(v);
-                            const dx = u - x0;
-                            const dy = v - y0;
-
-                            const idx00 = (y0 * fullW + x0) * 4;
-                            const idx10 = idx00 + 4;
-                            const idx01 = idx00 + fullW * 4;
-                            const idx11 = idx01 + 4;
-
-                            const w00 = (1 - dx) * (1 - dy);
-                            const w10 = dx * (1 - dy);
-                            const w01 = (1 - dx) * dy;
-                            const w11 = dx * dy;
-
-                            dstData[dstIdx]     = srcData[idx00]     * w00 + srcData[idx10]     * w10 + srcData[idx01]     * w01 + srcData[idx11]     * w11;
-                            dstData[dstIdx + 1] = srcData[idx00 + 1] * w00 + srcData[idx10 + 1] * w10 + srcData[idx01 + 1] * w01 + srcData[idx11 + 1] * w11;
-                            dstData[dstIdx + 2] = srcData[idx00 + 2] * w00 + srcData[idx10 + 2] * w10 + srcData[idx01 + 2] * w01 + srcData[idx11 + 2] * w11;
-                            dstData[dstIdx + 3] = 255;
-                        } else {
-                            dstData[dstIdx] = 255;
-                            dstData[dstIdx + 1] = 255;
-                            dstData[dstIdx + 2] = 255;
-                            dstData[dstIdx + 3] = 255;
-                        }
-                    }
-                }
-
-                dCtx.putImageData(dstImgData, 0, 0);
-
-                page.originalDataUrl = dstCanvas.toDataURL('image/png');
+                page.cropPoints = JSON.parse(JSON.stringify(cropPoints));
+                page.originalDataUrl = warpPerspectiveFromImage(img, cropPoints, page.rotation);
                 page.rotation = 0;
                 renderActivePage(true);
                 showToast('Dokumen berhasil dipotong & diluruskan dalam resolusi Master 1000 DPI!', 'success');
             };
-            img.src = page.originalDataUrl;
+            img.src = page.rawUploadDataUrl || page.originalDataUrl;
         }
 
         // ================= TRAY HALAMAN & AKSI HAPUS =================
